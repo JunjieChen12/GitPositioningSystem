@@ -27,6 +27,15 @@ class InspectCommandTests(unittest.TestCase):
         self.assertEqual(stdout, "# Router\n")
         self.assertEqual(stderr, "")
 
+    def test_prints_malformed_router_without_parsing(self):
+        contents = "## Directories\n- missing description\n"
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "ROUTER.md").write_text(contents, encoding="utf-8")
+
+            status, stdout, stderr = self.run_cli("inspect", directory)
+
+        self.assertEqual((status, stdout, stderr), (0, contents, ""))
+
     def test_missing_directory_reports_error(self):
         with tempfile.TemporaryDirectory() as directory:
             status, stdout, stderr = self.run_cli("inspect", str(Path(directory) / "missing"))
