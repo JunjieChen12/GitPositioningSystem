@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "git-positioning-system"
+version = "0.1.0"
+description = "Inspect router documents in repositories"
+requires-python = ">=3.10"
+
+[project.scripts]
+git-gps = "repo_router.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

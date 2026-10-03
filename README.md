@@ -29,6 +29,17 @@ Coding Agent
 Eventually, Jev/Laya will be used to make routing decisions from natural
 language router documents.
 
+## Inspect a root router document
+
+Install the CLI with `python3 -m pip install -e .`, then run:
+
+```sh
+repo-router inspect /path/to/repository
+```
+
+The command prints that directory's `ROUTER.md`. If the directory or document
+is missing, it prints an error and exits with a nonzero status.
+
 ## Goals
 
 - Reduce unnecessary repository searches
