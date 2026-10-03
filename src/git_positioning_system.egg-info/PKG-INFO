@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: git-positioning-system
+Version: 0.1.0
+Summary: Inspect router documents in repositories
+Requires-Python: >=3.10

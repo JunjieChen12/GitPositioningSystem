@@ -1,0 +1,2 @@
+[console_scripts]
+repo-router = repo_router.cli:main

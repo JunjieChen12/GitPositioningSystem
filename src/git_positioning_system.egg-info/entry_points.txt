@@ -1,0 +1,2 @@
+[console_scripts]
+git-gps = repo_router.cli:main
