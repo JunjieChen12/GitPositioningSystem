@@ -34,7 +34,7 @@ language router documents.
 Install the CLI with `python3 -m pip install -e .`, then run:
 
 ```sh
-repo-router inspect /path/to/repository
+git-gps inspect /path/to/repository
 ```
 
 The command prints that directory's `ROUTER.md`. If the directory or document
