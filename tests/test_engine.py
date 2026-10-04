@@ -96,6 +96,15 @@ class RouteRepositoryTests(unittest.TestCase):
 
         self.assertEqual(result, RouteResult(RouteStatus.MISSING_ROUTER, None, "backend"))
 
+    def test_missing_target_preserves_search_directory(self):
+        (self.root / "backend" / "auth" / "jwt.py").unlink()
+
+        result = route_repository(
+            self.root, "backend auth JWT validation", KeywordRoutingStrategy()
+        )
+
+        self.assertEqual(result, RouteResult(RouteStatus.MISSING_TARGET, None, "backend/auth"))
+
     def test_invalid_repository(self):
         with self.assertRaisesRegex(RouterError, "Repository directory does not exist"):
             route_repository(self.root / "absent", "task", KeywordRoutingStrategy())

@@ -40,6 +40,19 @@ git-gps inspect /path/to/repository
 The command prints that directory's `ROUTER.md`. If the directory or document
 is missing, it prints an error and exits with a nonzero status.
 
+## Route a task
+
+Use a task description to follow matching entries through nested router documents:
+
+```sh
+git-gps route . "Where is JWT validation handled?"
+```
+
+The command prints a status and a `search_root` directory for broader search.
+When it finds a file, it also prints its repository-relative `path`. Routing
+uses case-insensitive keyword matches, so the task needs matching words in
+the entries at each level.
+
 ## Goals
 
 - Reduce unnecessary repository searches
