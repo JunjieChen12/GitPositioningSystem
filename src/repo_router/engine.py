@@ -13,6 +13,7 @@ class RouteStatus(str, Enum):
     FOUND = "found"
     NO_MATCH = "no_match"
     MISSING_ROUTER = "missing_router"
+    MISSING_TARGET = "missing_target"
     MAX_DEPTH = "max_depth"
     CYCLE = "cycle"
 
@@ -61,7 +62,18 @@ def route_repository(
         target_relative = target.relative_to(root).as_posix()
 
         if not isinstance(choice, DirectoryEntry):
-            return RouteResult(RouteStatus.FOUND, target_relative, current_relative)
+            if not target.is_file():
+                return RouteResult(
+                    RouteStatus.MISSING_TARGET,
+                    None,
+                    current_relative,
+                )
+
+            return RouteResult(
+                RouteStatus.FOUND,
+                None,
+                current_relative,
+            )
 
         if target in visited:
             return RouteResult(RouteStatus.CYCLE, None, current_relative)
