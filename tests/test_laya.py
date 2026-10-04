@@ -57,6 +57,48 @@ class LayaRoutingStrategyTests(unittest.TestCase):
 
         self.assertIs(chosen, self.entries[1])
 
+    def test_semantic_criteria_and_returned_id_preserve_original_entry(self):
+        entries = [
+            DirectoryEntry("src/", "production source code"),
+            DirectoryEntry("tests/", "automated tests"),
+            FileEntry("laya.py", "local Laya routing integration"),
+        ]
+        body = json.dumps({"answers": {"route": {"choice": "laya_py"}}}).encode()
+
+        with self.mock_response(body) as urlopen:
+            chosen = self.strategy.decide("Find the Laya integration", entries)
+
+        self.assertIs(chosen, entries[2])
+        payload = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(
+            payload["questions"]["route"]["criteria"],
+            {
+                "src": "directory src/: production source code",
+                "tests": "directory tests/: automated tests",
+                "laya_py": "file laya.py: local Laya routing integration",
+            },
+        )
+
+    def test_normalizes_representative_paths(self):
+        entries = [
+            DirectoryEntry("src/", "source"),
+            DirectoryEntry("repo_router/", "router package"),
+            FileEntry("laya.py", "Laya client"),
+            FileEntry("foo-bar.py", "hyphenated file"),
+            FileEntry("some/path/file.py", "nested file"),
+        ]
+        body = json.dumps({"answers": {"route": {"choice": "some_path_file_py"}}}).encode()
+
+        with self.mock_response(body) as urlopen:
+            chosen = self.strategy.decide("Find nested file", entries)
+
+        self.assertIs(chosen, entries[4])
+        criteria = json.loads(urlopen.call_args.args[0].data)["questions"]["route"]["criteria"]
+        self.assertEqual(
+            list(criteria),
+            ["src", "repo_router", "laya_py", "foo_bar_py", "some_path_file_py"],
+        )
+
     def test_semantic_ids_from_directory_and_file_paths(self):
         entries = [
             DirectoryEntry("src/", "production source code"),
@@ -78,16 +120,16 @@ class LayaRoutingStrategyTests(unittest.TestCase):
 
     def test_colliding_paths_receive_deterministic_suffixes(self):
         entries = [
-            FileEntry("foo.bar", "first"),
-            FileEntry("foo-bar", "second"),
+            FileEntry("foo-bar.py", "first"),
+            FileEntry("foo_bar.py", "second"),
         ]
-        body = json.dumps({"answers": {"route": {"choice": "foo_bar_2"}}}).encode()
+        body = json.dumps({"answers": {"route": {"choice": "foo_bar_py_2"}}}).encode()
         with self.mock_response(body) as urlopen:
             chosen = self.strategy.decide("second", entries)
 
         self.assertIs(chosen, entries[1])
         criteria = json.loads(urlopen.call_args.args[0].data)["questions"]["route"]["criteria"]
-        self.assertEqual(list(criteria), ["foo_bar", "foo_bar_2"])
+        self.assertEqual(list(criteria), ["foo_bar_py", "foo_bar_py_2"])
 
     def test_collision_suffix_does_not_claim_another_paths_base_id(self):
         entries = [
@@ -120,35 +162,58 @@ class LayaRoutingStrategyTests(unittest.TestCase):
         self.assertTrue(all(re.fullmatch(r"[a-z][a-z0-9_]*", key) for key in criteria))
 
     def test_preserves_metadata_for_last_decision_and_clears_it_next_time(self):
+        entries = [
+            DirectoryEntry("src/", "source"),
+            DirectoryEntry("tests/", "tests"),
+            DirectoryEntry("docs/", "documentation"),
+        ]
         body = json.dumps(
             {
                 "answers": {
                     "route": {
-                        "choice": "login_py",
-                        "confidence": 0.7,
-                        "answer_confidence": 0.85,
-                        "probabilities": {"auth": 0.15, "login_py": 0.85},
+                        "choice": "src",
+                        "confidence": 0.33,
+                        "answer_confidence": 0.75,
+                        "probabilities": {"src": 0.75, "tests": 0.15, "docs": 0.10},
                     }
                 }
             }
         ).encode()
         strategy = LayaRoutingStrategy()
         with self.mock_response(body):
-            strategy.decide("Find login endpoints", self.entries)
+            chosen = strategy.decide("Find source code", entries)
 
+        self.assertIs(chosen, entries[0])
         self.assertEqual(
             strategy.decision_metadata(),
             {
-                "confidence": 0.7,
-                "answer_confidence": 0.85,
-                "probabilities": {"auth": 0.15, "login_py": 0.85},
+                "confidence": 0.33,
+                "answer_confidence": 0.75,
+                "probabilities": {"src": 0.75, "tests": 0.15, "docs": 0.10},
             },
         )
         self.assertIsNone(strategy.decide("task", []))
         self.assertIsNone(strategy.decision_metadata())
 
+    def test_metadata_resets_between_nonempty_decisions(self):
+        first = json.dumps(
+            {"answers": {"route": {"choice": "auth", "confidence": 0.8}}}
+        ).encode()
+        second = json.dumps({"answers": {"route": {"choice": "login_py"}}}).encode()
+        response = MagicMock()
+        response.read.side_effect = [first, second]
+        response.__enter__.return_value = response
+        strategy = LayaRoutingStrategy()
+
+        with patch("repo_router.laya.urlopen", return_value=response):
+            strategy.decide("first task", self.entries)
+            self.assertEqual(strategy.decision_metadata(), {"confidence": 0.8})
+            strategy.decide("second task", self.entries)
+
+        self.assertIsNone(strategy.decision_metadata())
+
     def test_unknown_id_raises_response_error(self):
-        body = json.dumps({"answers": {"route": {"choice": "invented.py"}}}).encode()
+        body = json.dumps({"answers": {"route": {"choice": "does_not_exist"}}}).encode()
         with self.mock_response(body):
             with self.assertRaisesRegex(LayaResponseError, "unknown route ID"):
                 self.strategy.decide("task", self.entries)

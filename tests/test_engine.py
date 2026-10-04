@@ -129,6 +129,44 @@ class RouteRepositoryTests(unittest.TestCase):
             ),
         )
 
+    def test_laya_routes_through_semantic_ids_to_nested_file(self):
+        package = self.root / "src" / "repo_router"
+        package.mkdir(parents=True)
+        (self.root / "ROUTER.md").write_text(
+            "## Directories\n- src/ — production source code\n",
+            encoding="utf-8",
+        )
+        (self.root / "src" / "ROUTER.md").write_text(
+            "## Directories\n- repo_router/ — routing package\n",
+            encoding="utf-8",
+        )
+        (package / "ROUTER.md").write_text(
+            "## Important Files\n- laya.py — local Laya routing integration\n",
+            encoding="utf-8",
+        )
+        (package / "laya.py").touch()
+        response = MagicMock()
+        response.read.side_effect = [
+            json.dumps({"answers": {"route": {"choice": choice_id}}}).encode()
+            for choice_id in ("src", "repo_router", "laya_py")
+        ]
+        response.__enter__.return_value = response
+
+        with patch("repo_router.laya.urlopen", return_value=response) as urlopen:
+            result = route_repository(self.root, "Find the Laya integration", LayaRoutingStrategy())
+
+        self.assertEqual(result.status, RouteStatus.FOUND)
+        self.assertEqual(result.path, "src/repo_router/laya.py")
+        self.assertEqual(
+            result.trace,
+            (
+                RouteTraceStep(".", "src/"),
+                RouteTraceStep("src", "repo_router/"),
+                RouteTraceStep("src/repo_router", "laya.py"),
+            ),
+        )
+        self.assertEqual(urlopen.call_count, 3)
+
     def test_no_matching_route_at_root(self):
         result = route_repository(self.root, "unrelated topic", KeywordRoutingStrategy())
 
