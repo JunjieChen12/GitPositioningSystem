@@ -141,6 +141,24 @@ class RouteRepositoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "max_depth"):
             route_repository(self.root, "task", KeywordRoutingStrategy(), max_depth=-1)
 
+    def test_missing_file_target(self):
+        (self.root / "backend" / "auth" / "jwt.py").unlink()
+
+        result = route_repository(
+            self.root,
+            "task",
+            PathSequenceStrategy("backend/", "auth/", "jwt.py"),
+        )
+
+        self.assertEqual(
+            result,
+            RouteResult(
+                RouteStatus.MISSING_TARGET,
+                None,
+                "backend/auth",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
