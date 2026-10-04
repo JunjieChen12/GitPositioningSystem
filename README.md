@@ -26,8 +26,8 @@ Relevant Files
 ↓
 Coding Agent
 
-Eventually, Jev/Laya will be used to make routing decisions from natural
-language router documents.
+The CLI uses keyword matching by default and can use a local Laya server for
+routing decisions.
 
 ## Inspect a root router document
 
@@ -46,12 +46,35 @@ Use a task description to follow matching entries through nested router document
 
 ```sh
 git-gps route . "Where is JWT validation handled?"
+git-gps route . "Where is auth handled?" --strategy keyword
+git-gps route . "Where is auth handled?" --strategy laya
+git-gps route . "Where is auth handled?" --strategy laya --trace
 ```
 
 The command prints a status and a `search_root` directory for broader search.
 When it finds a file, it also prints its repository-relative `path`. Routing
-uses case-insensitive keyword matches, so the task needs matching words in
-the entries at each level.
+uses case-insensitive keyword matches by default, so the task needs matching
+words in the entries at each level. Select `--strategy laya` to ask a local
+Laya server to choose among the listed entries. Add `--trace` to print each
+directory and entry selected during traversal. Laya confidence and choice
+probabilities are also retained in the structured route trace for Python callers.
+
+## Use a local Laya server from Python
+
+`LayaRoutingStrategy` sends the task and available route entries to a local
+Laya choice endpoint. It returns only an entry from that list. The default
+server URL is `http://localhost:8000`; set `LAYA_BASE_URL` to change it and
+`LAYA_ENDPOINT_PATH` to change the default `/v1/systemone` path.
+
+```python
+from repo_router.engine import route_repository
+from repo_router.laya import LayaRoutingStrategy
+
+result = route_repository(".", "Where is JWT validation handled?", LayaRoutingStrategy())
+```
+
+The local server must be running when this strategy is used. Connection and
+response errors are reported as Laya-specific exceptions.
 
 ## Goals
 
