@@ -71,7 +71,7 @@ def route_repository(
 
             return RouteResult(
                 RouteStatus.FOUND,
-                None,
+                target_relative,
                 current_relative,
             )
 
