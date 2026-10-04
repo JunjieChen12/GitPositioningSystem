@@ -1,6 +1,6 @@
 """Choose a route entry for a task without coupling callers to a strategy."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Protocol, TypeAlias
 import re
 
@@ -15,6 +15,13 @@ class RoutingStrategy(Protocol):
 
     def decide(self, task: str, entries: Iterable[RouteEntry]) -> RouteEntry | None:
         """Return the most relevant entry, or None when none matches."""
+
+
+class DecisionMetadataProvider(Protocol):
+    """Optional strategy hook for metadata about the most recent decision."""
+
+    def decision_metadata(self) -> Mapping[str, object] | None:
+        """Return metadata for the most recent call to decide, if available."""
 
 
 _WORDS = re.compile(r"[a-z0-9]+", re.IGNORECASE)

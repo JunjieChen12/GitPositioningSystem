@@ -1,6 +1,7 @@
 """Traverse repository router documents with a supplied decision strategy."""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -19,10 +20,23 @@ class RouteStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class RouteTraceStep:
+    current_directory: str
+    selected_path: str | None
+    metadata: Mapping[str, object] | None = None
+
+
+@dataclass(frozen=True)
 class RouteResult:
+    """A route outcome and its observed decisions.
+
+    Trace is excluded from equality to preserve comparisons of existing result fields.
+    """
+
     status: RouteStatus
     path: str | None
     search_root: str
+    trace: tuple[RouteTraceStep, ...] = field(default_factory=tuple, compare=False)
 
 
 def route_repository(
@@ -45,16 +59,29 @@ def route_repository(
     contents = read_root_router(root)
     current = root
     visited: set[Path] = set()
+    trace: list[RouteTraceStep] = []
     depth = 0
+
+    def result(status: RouteStatus, path: str | None, search_root: str) -> RouteResult:
+        return RouteResult(status, path, search_root, tuple(trace))
 
     while True:
         visited.add(current)
         document = parse_router(contents)
         choice = strategy.decide(task, [*document.directories, *document.files])
         current_relative = current.relative_to(root).as_posix()
+        metadata_provider = getattr(strategy, "decision_metadata", None)
+        metadata = metadata_provider() if callable(metadata_provider) else None
+        trace.append(
+            RouteTraceStep(
+                current_relative,
+                choice.path if choice is not None else None,
+                dict(metadata) if metadata else None,
+            )
+        )
 
         if choice is None:
-            return RouteResult(RouteStatus.NO_MATCH, None, current_relative)
+            return result(RouteStatus.NO_MATCH, None, current_relative)
 
         target = (current / choice.path).resolve()
         if not target.is_relative_to(root):
@@ -63,26 +90,26 @@ def route_repository(
 
         if not isinstance(choice, DirectoryEntry):
             if not target.is_file():
-                return RouteResult(
+                return result(
                     RouteStatus.MISSING_TARGET,
                     None,
                     current_relative,
                 )
 
-            return RouteResult(
+            return result(
                 RouteStatus.FOUND,
                 target_relative,
                 current_relative,
             )
 
         if target in visited:
-            return RouteResult(RouteStatus.CYCLE, None, current_relative)
+            return result(RouteStatus.CYCLE, None, current_relative)
         if depth >= max_depth:
-            return RouteResult(RouteStatus.MAX_DEPTH, None, target_relative)
+            return result(RouteStatus.MAX_DEPTH, None, target_relative)
 
         router = target / "ROUTER.md"
         if not router.is_file():
-            return RouteResult(RouteStatus.MISSING_ROUTER, None, target_relative)
+            return result(RouteStatus.MISSING_ROUTER, None, target_relative)
         try:
             contents = router.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:

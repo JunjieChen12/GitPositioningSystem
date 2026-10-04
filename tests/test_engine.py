@@ -1,11 +1,14 @@
 """Tests for recursive routing through repository documents."""
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from repo_router.decision import KeywordRoutingStrategy
-from repo_router.engine import RouteResult, RouteStatus, route_repository
+from repo_router.engine import RouteResult, RouteStatus, RouteTraceStep, route_repository
+from repo_router.laya import LayaRoutingStrategy
 from repo_router.router import RouterError
 
 
@@ -78,11 +81,59 @@ class RouteRepositoryTests(unittest.TestCase):
 
         self.assertEqual(result.path, "backend/auth/jwt.py")
         self.assertEqual(result.status, RouteStatus.FOUND)
+        self.assertEqual(
+            result.trace,
+            (
+                RouteTraceStep(".", "backend/"),
+                RouteTraceStep("backend", "auth/"),
+                RouteTraceStep("backend/auth", "jwt.py"),
+            ),
+        )
+
+    def test_laya_trace_preserves_confidence_and_probabilities(self):
+        (self.root / "ROUTER.md").write_text(
+            "## Important Files\n- target.py — selected file\n", encoding="utf-8"
+        )
+        (self.root / "target.py").touch()
+        response = MagicMock()
+        response.read.return_value = json.dumps(
+            {
+                "answers": {
+                    "route": {
+                        "choice": "target_py",
+                        "confidence": 0.82,
+                        "answer_confidence": 0.94,
+                        "probabilities": {"target_py": 0.94},
+                    }
+                }
+            }
+        ).encode()
+        response.__enter__.return_value = response
+
+        with patch("repo_router.laya.urlopen", return_value=response):
+            result = route_repository(self.root, "selected file", LayaRoutingStrategy())
+
+        self.assertEqual(result.status, RouteStatus.FOUND)
+        self.assertEqual(
+            result.trace,
+            (
+                RouteTraceStep(
+                    ".",
+                    "target.py",
+                    {
+                        "confidence": 0.82,
+                        "answer_confidence": 0.94,
+                        "probabilities": {"target_py": 0.94},
+                    },
+                ),
+            ),
+        )
 
     def test_no_matching_route_at_root(self):
         result = route_repository(self.root, "unrelated topic", KeywordRoutingStrategy())
 
         self.assertEqual(result, RouteResult(RouteStatus.NO_MATCH, None, "."))
+        self.assertEqual(result.trace, (RouteTraceStep(".", None),))
 
     def test_no_matching_route_after_descent(self):
         result = route_repository(self.root, "unknown", PathSequenceStrategy("backend/", "missing"))
@@ -95,6 +146,7 @@ class RouteRepositoryTests(unittest.TestCase):
         result = route_repository(self.root, "backend task", PathSequenceStrategy("backend/"))
 
         self.assertEqual(result, RouteResult(RouteStatus.MISSING_ROUTER, None, "backend"))
+        self.assertEqual(result.trace, (RouteTraceStep(".", "backend/"),))
 
     def test_missing_target_preserves_search_directory(self):
         (self.root / "backend" / "auth" / "jwt.py").unlink()
