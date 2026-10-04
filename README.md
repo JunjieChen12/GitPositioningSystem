@@ -1,4 +1,4 @@
-# Repo Router
+# Git-GPS
 
 Repo Router is a routing layer for AI coding agents such as Codex and Claude.
 

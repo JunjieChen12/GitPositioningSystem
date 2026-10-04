@@ -1,4 +1,4 @@
-"""Run the command-line interface with python -m repo_router."""
+"""Run the command-line interface with python -m git-gps."""
 
 from repo_router.cli import main
 

@@ -1,4 +1,4 @@
-"""Command-line interface for repo-router."""
+"""Command-line interface for git-gps."""
 
 import argparse
 import sys
