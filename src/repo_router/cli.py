@@ -5,6 +5,7 @@ import sys
 
 from repo_router.decision import KeywordRoutingStrategy
 from repo_router.engine import RouteStatus, route_repository
+from repo_router.jev import JevError, JevRoutingStrategy
 from repo_router.laya import LayaError, LayaRoutingStrategy
 from repo_router.router import RouterError, read_root_router
 
@@ -19,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument("task", help="Natural-language task")
     route.add_argument(
         "--strategy",
-        choices=("keyword", "laya"),
+        choices=("keyword", "laya", "jev"),
         default="keyword",
         help="Routing strategy (default: keyword)",
     )
@@ -33,10 +34,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"git-gps: {exc}", file=sys.stderr)
             return 1
     elif args.command == "route":
-        strategy = KeywordRoutingStrategy() if args.strategy == "keyword" else LayaRoutingStrategy()
+        if args.strategy == "keyword":
+            strategy = KeywordRoutingStrategy()
+        elif args.strategy == "laya":
+            strategy = LayaRoutingStrategy()
+        else:
+            strategy = JevRoutingStrategy()
         try:
             result = route_repository(args.repository, args.task, strategy)
-        except (RouterError, LayaError) as exc:
+        except (RouterError, LayaError, JevError) as exc:
             print(f"git-gps: {exc}", file=sys.stderr)
             return 1
         if args.trace:

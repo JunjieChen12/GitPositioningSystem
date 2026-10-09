@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -163,6 +164,44 @@ class RouteCommandTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertIn(". -> backend/\nbackend -> auth/\nbackend/auth -> jwt.py\n", stdout)
         self.assertIn("status: found\npath: backend/auth/jwt.py\n", stdout)
+
+    def test_jev_strategy_and_trace_show_each_level(self):
+        response = MagicMock()
+        response.read.side_effect = [
+            json.dumps({"answers": {"route": {"choice": choice_id}}}).encode()
+            for choice_id in ("backend", "auth", "jwt_py")
+        ]
+        response.__enter__.return_value = response
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}, clear=True):
+            with patch("repo_router.jev.urlopen", return_value=response) as urlopen:
+                status, stdout, stderr = self.run_cli(
+                    "route", str(self.root), "JWT validation", "--strategy", "jev", "--trace"
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(stderr, "")
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertEqual(
+            stdout,
+            "route trace:\n"
+            ". -> backend/\n"
+            "backend -> auth/\n"
+            "backend/auth -> jwt.py\n"
+            "\nstatus: found\npath: backend/auth/jwt.py\nsearch_root: backend/auth\n",
+        )
+
+    def test_jev_without_api_key_reports_clear_error(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("repo_router.jev.urlopen") as urlopen:
+                status, stdout, stderr = self.run_cli(
+                    "route", str(self.root), "JWT validation", "--strategy", "jev"
+                )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(stdout, "")
+        self.assertTrue(stderr.startswith("git-gps: OPENROUTER_API_KEY is required"))
+        urlopen.assert_not_called()
 
     def test_invalid_strategy_is_rejected(self):
         stderr = io.StringIO()
