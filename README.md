@@ -185,6 +185,117 @@ git-gps route . "Where is the Laya integration handled?" --strategy jev --trace
 
 OpenRouter usage may cost money. Git GPS also accepts optional `OPENROUTER_HTTP_REFERER` and `OPENROUTER_APP_TITLE` environment variables for the corresponding OpenRouter request headers; neither is required.
 
+## Multi-route Jev routing
+
+Single-route Jev uses one `choice` decision to select the best route.
+Multi-route Jev asks an independent yes/no relevance question (`type: "noul"`)
+for every candidate entry, batching all questions into **one Decisions API call
+per explored `ROUTER.md`**. Each criterion includes the route's type, path, and
+description. Multiple repository locations may all be relevant to one coding
+task, so these scores are independent relevance probabilities: they **do not
+sum to 1** and are never normalized.
+
+For the task "Update Jev routing and its CLI behavior and tests", possible
+scores are:
+
+```text
+src/       0.96
+tests/     0.91
+docs/      0.04
+```
+
+With `--threshold 0.50`, `src/` and `tests/` are selected and `docs/` is dropped.
+Selected directories are explored independently. Files and fallback search
+roots are deduplicated in deterministic breadth-first order.
+
+```sh
+git-gps route . \
+  "Add a field to notes and display it in the frontend" \
+  --strategy jev \
+  --multi \
+  --top-k 4 \
+  --trace
+```
+
+Example output (probabilities depend on Jev's response):
+
+```text
+route trace:
+. -> models.py (0.86)
+. -> schemas.py (0.79)
+. -> main.py (0.72)
+. -> static/ (0.68)
+static -> script.js (0.91)
+
+status: found
+relevant paths:
+- models.py
+- schemas.py
+- main.py
+- static/script.js
+```
+
+`--top-k` defaults to **3 entries per router**. `--threshold` is optional
+and has no default cutoff. Selection first discards missing or invalid scores,
+then excludes exact zero scores (even with `--threshold 0`). This conservative
+default avoids filling `top_k` with routes Jev considers irrelevant without
+imposing a global relevance cutoff. Use `--threshold` to exclude low positive
+scores as needed. Only numeric `noul` values in [0, 1] are accepted; booleans,
+strings, and non-finite numbers are invalid.
+
+After filtering for relevance greater than zero and, if supplied, relevance
+**at least** the threshold, entries are sorted by descending relevance and at
+most `top_k` are kept. Ties retain original router order. For example,
+`--top-k 4 --threshold 0.40` keeps up to four entries with relevance at least
+0.40. Unknown answer IDs are ignored. Missing or malformed individual answers
+are skipped, with details in trace metadata's `score_errors`; if all candidates
+are unscored or rejected, that router reports `no_match`. Malformed overall
+responses are reported as Jev errors. Dropped routes do not appear in normal
+results or selected-route CLI traces.
+
+Traversal is bounded by `--max-depth` (default **10** directory transitions
+per branch) and `--max-nodes` (default **20**). The global node budget counts
+the root plus every followed target, including repeated paths and failed
+targets. Reaching the limit while additional targets remain produces
+`status: budget_exceeded`, retaining files already found and fallback search
+roots for unfinished branches. Per-branch cycle protection prevents loops.
+Missing directories/files report `missing_target`; directories without nested
+routers become search roots with `missing_router` outcomes.
+
+The separate Python API leaves `route_repository()` unchanged:
+
+```python
+from repo_router.engine import route_repository_multi
+from repo_router.jev import JevRoutingStrategy
+
+result = route_repository_multi(
+    ".", "Add a field to notes and display it in the frontend",
+    JevRoutingStrategy(), top_k=4, threshold=0.40, max_nodes=20,
+)
+print(result.paths, result.search_roots)
+```
+
+`MultiRoutingStrategy.decide_many()` is separate from the single-choice
+protocol. Jev shares transport validation between the two methods, while
+single-route requests remain `choice` and multi-route requests use `noul`.
+Python callers can pass `top_k=None` to select all entries with positive valid
+relevance scores that meet the threshold, subject to the traversal budget.
+`MultiRouteResult` includes `status`, `paths`, `search_roots`, `trace`,
+terminal `branches`, and budget `metadata`. Overall status gives budget
+exhaustion precedence, otherwise reports `found` if any file was found,
+otherwise the first terminal branch's status. Inspect `branches` for partial
+failures. Trace metadata retains `relevance_scores` keyed by semantic route ID,
+a compatibility `probabilities` map containing the same independent scores,
+and the selected route's `probability`. It also retains model, usage, and
+per-route confidence/answer confidence when returned. CLI traces show the
+selected route's independent relevance score in parentheses.
+
+Multi-route mode currently requires `--strategy jev`. It increases recall,
+but can also increase search scope and hosted API calls: each explored router
+requires a decision. Existing commands without `--multi` retain their
+single-route behavior. No keyword/Laya fallback or automatic Codex integration
+is added.
+
 ## Trace
 
 Add `--trace` to any `route` command to see each decision. For example, a semantic route might print:
