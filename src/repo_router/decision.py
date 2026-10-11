@@ -24,6 +24,23 @@ class DecisionMetadataProvider(Protocol):
         """Return metadata for the most recent call to decide, if available."""
 
 
+class MultiRoutingStrategy(Protocol):
+    """Select several supplied entries without changing single-route strategies."""
+
+    def decide_many(
+        self, task: str, entries: Iterable[RouteEntry], *,
+        top_k: int | None = 3, threshold: float | None = None,
+    ) -> list[RouteEntry]:
+        """Rank entries, filter by threshold, then take at most top_k."""
+
+
+def validate_multi_selection(top_k: int | None, threshold: float | None) -> None:
+    if top_k is not None and (isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0):
+        raise ValueError("top_k must be a positive integer or None")
+    if threshold is not None and not 0 <= threshold <= 1:
+        raise ValueError("threshold must be between 0 and 1")
+
+
 _WORDS = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 _STOP_WORDS = frozenset(
     {"a", "an", "and", "are", "for", "in", "is", "of", "on", "or", "the", "to", "where"}
