@@ -1,6 +1,7 @@
 """Command-line interface for git-gps."""
 
 import argparse
+import json
 import sys
 
 from repo_router.decision import KeywordRoutingStrategy
@@ -35,17 +36,20 @@ def main(argv: list[str] | None = None) -> int:
     route.add_argument(
         "--strategy",
         choices=("keyword", "laya", "jev"),
-        default="keyword",
-        help="Routing strategy (default: keyword)",
+        default=None,
+        help="Routing strategy (default: keyword; jev with --multi)",
     )
     route.add_argument("--trace", action="store_true", help="Print each routing decision")
-    route.add_argument("--multi", action="store_true", help="Find multiple relevant paths (Jev only)")
+    route.add_argument("--json", action="store_true", help="Print machine-readable results (suppresses --trace)")
+    route.add_argument("--multi", action="store_true", help="Find multiple relevant paths (selects Jev by default)")
     route.add_argument("--top-k", type=_positive_int, default=3, help="Maximum choices per router (default: 3)")
     route.add_argument("--threshold", type=_probability, help="Minimum route probability")
     route.add_argument("--max-nodes", type=_positive_int, default=20, help="Multi-route node budget (default: 20)")
     route.add_argument("--max-depth", type=int, default=10, help="Maximum directory transitions (default: 10)")
     args = parser.parse_args(argv)
     if args.command == "route":
+        if args.strategy is None:
+            args.strategy = "jev" if args.multi else "keyword"
         if args.multi and args.strategy != "jev":
             parser.error("--multi requires --strategy jev")
         if args.max_depth < 0:
@@ -75,6 +79,13 @@ def main(argv: list[str] | None = None) -> int:
         except (RouterError, LayaError, JevError) as exc:
             print(f"git-gps: {exc}", file=sys.stderr)
             return 1
+        if args.json:
+            print(json.dumps({
+                "status": result.status.value,
+                "relevant_paths": result.paths if args.multi else ([result.path] if result.path else []),
+                "search_roots": result.search_roots if args.multi else [result.search_root],
+            }))
+            return 0
         if args.trace:
             print("route trace:")
             for step in result.trace:

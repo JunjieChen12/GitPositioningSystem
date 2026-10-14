@@ -57,8 +57,8 @@ class JevRoutingStrategy:
         All relevance questions are batched into one request. Missing or invalid
         answers are unscored; ties retain router order. Scores are never normalized.
         """
-        validate_multi_selection(top_k, threshold)
         self._decision_metadata = None
+        validate_multi_selection(top_k, threshold)
         by_id = entries_by_semantic_id(entries)
         if not by_id:
             return []

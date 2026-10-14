@@ -37,7 +37,11 @@ class MultiRoutingStrategy(Protocol):
 def validate_multi_selection(top_k: int | None, threshold: float | None) -> None:
     if top_k is not None and (isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0):
         raise ValueError("top_k must be a positive integer or None")
-    if threshold is not None and not 0 <= threshold <= 1:
+    if threshold is not None and (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, (int, float))
+        or not 0 <= threshold <= 1
+    ):
         raise ValueError("threshold must be between 0 and 1")
 
 

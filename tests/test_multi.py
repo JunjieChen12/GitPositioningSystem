@@ -145,6 +145,44 @@ def test_empty_entries_without_network(hosted):
     http.assert_not_called()
 
 
+@pytest.mark.parametrize("options,message", [
+    ({"top_k": value}, "top_k must be a positive integer or None")
+    for value in (0, -1, True, False, 1.5, "2")
+] + [
+    ({"threshold": value}, "threshold must be between 0 and 1")
+    for value in (True, False, "0.5", [], {}, -0.1, 1.1,
+                  float("nan"), float("inf"), float("-inf"))
+])
+def test_invalid_selection_clears_metadata_before_request(hosted, options, message):
+    http = hosted(relevance(SCORES))
+    strategy = JevRoutingStrategy()
+    strategy.decide_many("task", ENTRIES)
+    assert strategy.decision_metadata()["relevance_scores"] == SCORES
+    with pytest.raises(ValueError, match=message):
+        strategy.decide_many("task", ENTRIES, **options)
+    assert strategy.decision_metadata() is None
+    assert http.call_count == 1
+
+
+@pytest.mark.parametrize("threshold,expected", [(0, ENTRIES[:2]), (1, ENTRIES[:1])])
+def test_numeric_threshold_boundaries(hosted, threshold, expected):
+    hosted(relevance({"models_py": 1, "schemas_py": 0.5, "main_py": 0}))
+    assert JevRoutingStrategy().decide_many(
+        "task", ENTRIES, top_k=None, threshold=threshold,
+    ) == expected
+
+
+def test_failed_request_clears_previous_metadata(hosted):
+    http = hosted(relevance(SCORES))
+    strategy = JevRoutingStrategy()
+    strategy.decide_many("task", ENTRIES)
+    http.return_value.read.side_effect = None
+    http.return_value.read.return_value = b'{"answers": []}'
+    with pytest.raises(JevResponseError):
+        strategy.decide_many("task", ENTRIES)
+    assert strategy.decision_metadata() is None
+
+
 def router(directory, files=(), directories=()):
     directory.mkdir(parents=True, exist_ok=True)
     text = "## Directories\n" + "".join(f"- {name} — directory\n" for name in directories)
@@ -316,9 +354,10 @@ def test_cli_invalid_input(repository, capsys, args, message):
     (["--threshold", "0.83"], ["models.py"]),
     (["--top-k", "2", "--threshold", "0.81"], ["models.py"]),
 ])
-def test_cli_multi_trace(hosted, repository, capsys, options, expected):
+@pytest.mark.parametrize("strategy_args", [[], ["--strategy", "jev"]])
+def test_cli_multi_trace(hosted, repository, capsys, options, expected, strategy_args):
     hosted(root_answer(), relevance({"script_js": 0.95}))
-    assert main(["route", str(repository), "task", "--strategy", "jev", "--multi",
+    assert main(["route", str(repository), "task", *strategy_args, "--multi",
                  "--trace", *options]) == 0
     output = capsys.readouterr().out
     assert "route trace:\n. -> models.py (0.85)" in output
@@ -385,3 +424,31 @@ def test_multi_metadata_reset_and_missing_key(hosted, monkeypatch):
     with pytest.raises(JevConfigurationError):
         JevRoutingStrategy().decide_many("task", ENTRIES)
     assert http.call_count == 1
+
+
+@pytest.mark.parametrize("trace", [[], ["--trace"]])
+def test_cli_multi_json(hosted, repository, capsys, trace):
+    expected = {"status": "found", "relevant_paths": ["models.py", "schemas.py", "static/script.js"],
+                "search_roots": []}
+    outputs = []
+    for _ in range(2):
+        hosted(root_answer(), relevance({"script_js": 0.95}))
+        assert main(["route", str(repository), "task", "--strategy", "jev", "--multi",
+                     "--json", *trace]) == 0
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        assert json.loads(captured.out) == expected
+        assert len(captured.out.splitlines()) == 1
+        outputs.append(captured.out)
+    assert outputs[0] == outputs[1]
+
+
+def test_cli_multi_json_search_roots(hosted, repository, capsys):
+    hosted(root_answer())
+    assert main(["route", str(repository), "task", "--strategy", "jev", "--multi",
+                 "--json", "--max-nodes", "2"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "status": "budget_exceeded", "relevant_paths": ["models.py"], "search_roots": ["."],
+    }

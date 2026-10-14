@@ -61,7 +61,7 @@ git-gps --help
 git-gps inspect .
 ```
 
-`inspect` prints the root `ROUTER.md` as written. The `route` command accepts `git-gps route REPOSITORY TASK [--strategy keyword|laya|jev] [--trace]`.
+`inspect` prints the root `ROUTER.md` as written. The `route` command accepts `git-gps route REPOSITORY TASK [--strategy keyword|laya|jev] [--multi] [--trace]`. The default strategy is keyword for single-route mode and Jev with `--multi`.
 
 ## ROUTER.md Format
 
@@ -211,7 +211,6 @@ roots are deduplicated in deterministic breadth-first order.
 ```sh
 git-gps route . \
   "Add a field to notes and display it in the frontend" \
-  --strategy jev \
   --multi \
   --top-k 4 \
   --trace
@@ -242,6 +241,9 @@ default avoids filling `top_k` with routes Jev considers irrelevant without
 imposing a global relevance cutoff. Use `--threshold` to exclude low positive
 scores as needed. Only numeric `noul` values in [0, 1] are accepted; booleans,
 strings, and non-finite numbers are invalid.
+Python API thresholds must also be numeric values in [0, 1]; booleans and
+other nonnumeric values raise `ValueError`. Each `decide_many()` call clears
+previous decision metadata, including when validation or the request fails.
 
 After filtering for relevance greater than zero and, if supplied, relevance
 **at least** the threshold, entries are sorted by descending relevance and at
@@ -290,11 +292,12 @@ and the selected route's `probability`. It also retains model, usage, and
 per-route confidence/answer confidence when returned. CLI traces show the
 selected route's independent relevance score in parentheses.
 
-Multi-route mode currently requires `--strategy jev`. It increases recall,
+Multi-route mode automatically selects Jev when `--strategy` is omitted.
+Explicit `--strategy jev --multi` also works; keyword and Laya are rejected with `--multi`.
+It increases recall,
 but can also increase search scope and hosted API calls: each explored router
 requires a decision. Existing commands without `--multi` retain their
-single-route behavior. No keyword/Laya fallback or automatic Codex integration
-is added.
+single-route behavior. No keyword/Laya fallback is added. Codex hook integration is described below.
 
 ## Trace
 
@@ -344,19 +347,130 @@ git-gps route . "Where is note creation handled?" --strategy laya --trace
 
 For Laya, keep `laya-serve` running. For Jev, set `OPENROUTER_API_KEY`. To create routers in a new project, start with a root file listing the main directories, then add nested files only where a narrower choice is useful.
 
-## Using Git GPS With Codex
+## Codex hook integration
 
-Integration with coding agents is currently manual:
+```text
+Codex prompt → UserPromptSubmit hook → Git GPS → routed context returned to Codex
+```
 
-1. Run `git-gps route . "Where is note creation handled?" --strategy jev --trace` in the target project.
-2. Take the returned `path` or `search_root`.
-3. Tell Codex: “Git GPS routed this task to `<path>`. Start there and expand to related files if needed. Search more broadly if the route is insufficient.”
+The project hook routes each nonempty prompt with Jev, then returns candidate
+files and search roots for Codex to inspect first. Codex can expand its search
+when the route is insufficient; candidates are not instructions to edit every
+returned file. [Codex's hook documentation](https://learn.chatgpt.com/docs/hooks)
+confirms that plain stdout from `UserPromptSubmit` becomes additional context.
+
+Prerequisites:
+
+- Python 3.10+ (`python3` on PATH), Git, and an installed Git GPS version supporting `route --json`.
+- `OPENROUTER_API_KEY` set in the environment that launches Codex when using Jev.
+- A `ROUTER.md` at the repository root.
+- A Codex version supporting hooks, with the project trusted and hooks enabled.
+  Open `/hooks` to review and trust this hook's exact definition; changes may require review again.
+
+Install Git GPS using the installation steps above. For another project, copy
+these two files into that repository, preserving the layout:
+
+```text
+.codex/
+├── hooks.json
+└── hooks/
+    └── gitgps_route.py
+```
+
+The included `.codex/hooks.json` uses the documented event schema:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "repo_root=$(git rev-parse --show-toplevel 2>/dev/null) && python3 \"$repo_root/.codex/hooks/gitgps_route.py\" || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The command locates the script from the Git root, so it also works when Codex
+starts in `src/repo_router`. The script reads `prompt` and `cwd` from JSON stdin,
+runs `git rev-parse --show-toplevel` in that `cwd`, and runs Git GPS at the root:
+
+```sh
+git-gps route . "<user prompt>" --strategy jev --multi --top-k 4 --threshold 0.5 --json
+```
+
+The script uses `GIT_GPS_EXECUTABLE` if set, otherwise `shutil.which("git-gps")`.
+It never relies on the `gitgps` shell alias/function. The override is a single
+executable, not a command with flags; relative executable paths containing `/`
+are resolved from the repository root. Set the environment before launching Codex:
+
+```sh
+export OPENROUTER_API_KEY="sk-or-v1-..."  # placeholder: supply your own key
+export GIT_GPS_EXECUTABLE="/path/to/git-gps"  # optional, e.g. a virtualenv executable
+```
+
+The hook inherits the existing environment and never reads secrets from repository
+files. Jev sends the prompt and router candidates to OpenRouter as in manual
+routing and may incur API costs. Git root discovery has a 3-second timeout;
+routing has a 25-second timeout, within the hook's 30-second budget. Missing
+executables, routers, invalid JSON, network errors, and timeouts fail open with
+exit code 0 and no context. Diagnostics are fixed short messages on stderr;
+subprocess stderr, exception details, and API keys are never echoed. No Codex
+or other agent is launched by the script.
+
+`route --json` emits only `status`, `relevant_paths`, and `search_roots`, for both
+single and multi routing. It suppresses `--trace`; existing text output is
+unchanged without `--json`. The hook consumes this JSON, validates repository
+paths, and prints up to 16 unique locations per section (each at most 240
+characters), with no trace or API metadata. All paths are relative to the stated
+repository root. Example hook stdout:
+
+```text
+Git GPS routing context:
+
+Relevant paths:
+- src/repo_router/jev.py
+- src/repo_router/decision.py
+- src/repo_router/route_ids.py
+- src/repo_router/cli.py
+
+Search roots:
+- tests
+
+Paths are relative to the repository root: /path/to/repo
+These are suggested starting locations, not guaranteed edit targets.
+Start with these Git GPS routed locations. Inspect them before doing a broad repository search. Expand beyond them if the route is insufficient.
+```
+
+Manual acceptance test:
+
+1. Install Git GPS, export the environment variables, and ensure the root router exists.
+2. Launch Codex from the root or `src/repo_router` and review/trust the hook in `/hooks`.
+3. Submit `Update Jev multi-route behavior and add tests for it`.
+4. Confirm that the hook supplies candidate paths/search roots and Codex inspects
+   them first. Actual routes depend on the routers and Jev response.
+5. Set `GIT_GPS_EXECUTABLE` to a nonexistent path and restart Codex; submitting
+   a prompt should continue normally without routing context.
+
+To inspect the script's stdout directly from a nested directory (this makes a
+live OpenRouter request when configured):
+
+```sh
+cd src/repo_router
+python3 -c 'import json, os; print(json.dumps({"prompt": "Update Jev multi-route behavior and add tests for it", "cwd": os.getcwd()}))' | python3 ../../.codex/hooks/gitgps_route.py
+```
 
 ## Testing
 
 ```sh
 python -m pip install pytest
-pytest
+python -m pytest
 ```
 
 Unit tests mock Laya and Jev HTTP responses. Normal `pytest` runs need neither a live Laya server nor an OpenRouter key and make no live Laya or Jev requests. Run live CLI checks separately when those services are configured:
@@ -390,4 +504,4 @@ Keep API keys in environment variables. Do not commit or hardcode them, or paste
 
 ## Future Work
 
-Current features are recursive routing, keyword routing, local Laya, hosted Jev, and trace output. Possible future work includes automated benchmarking, Codex/Claude integration, hybrid or fallback routing, router generation, and confidence-aware strategy selection.
+Current features are recursive routing, keyword routing, local Laya, hosted Jev, and trace output. Possible future work includes automated benchmarking, Claude integration, hybrid or fallback routing, router generation, and confidence-aware strategy selection.
