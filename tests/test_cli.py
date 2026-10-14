@@ -277,3 +277,27 @@ class RouteCommandTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(stdout, "")
         self.assertTrue(stderr.startswith("git-gps: Repository directory does not exist"))
+
+
+class JsonRouteCommandTests(unittest.TestCase):
+    setUp = RouteCommandTests.setUp
+    run_cli = RouteCommandTests.run_cli
+
+    def test_single_json_is_deterministic_and_suppresses_trace(self):
+        args = ("route", str(self.root), "JWT validation", "--json", "--trace")
+        first = self.run_cli(*args)
+        self.assertEqual(first, self.run_cli(*args))
+        status, stdout, stderr = first
+        self.assertEqual((status, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout), {
+            "status": "found", "relevant_paths": ["backend/auth/jwt.py"],
+            "search_roots": ["backend/auth"],
+        })
+        self.assertEqual(len(stdout.splitlines()), 1)
+
+    def test_no_match_json(self):
+        status, stdout, stderr = self.run_cli("route", str(self.root), "unrelated", "--json")
+        self.assertEqual((status, stderr), (0, ""))
+        self.assertEqual(json.loads(stdout), {
+            "status": "no_match", "relevant_paths": [], "search_roots": ["."],
+        })
