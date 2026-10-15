@@ -7,6 +7,8 @@ Contains the core Git Positioning System implementation.
 
 ## Important Files
 - cli.py — handles command-line arguments including selecting keyword or Laya routing strategies
+- bootstrap.py — inspects safe Git-visible source excerpts and generates missing router hierarchies
+- generation.py — defines the router description model interface and configurable OpenRouter chat transport
 - engine.py — performs recursive hierarchical traversal through ROUTER.md files
 - decision.py — defines the RoutingStrategy interface and keyword-based routing
 - laya.py — implements LayaRoutingStrategy and communicates with the local Laya /v1/systemone API

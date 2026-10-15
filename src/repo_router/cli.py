@@ -4,6 +4,8 @@ import argparse
 import json
 import sys
 
+from repo_router.bootstrap import bootstrap_repository
+from repo_router.generation import GenerationError
 from repo_router.decision import KeywordRoutingStrategy
 from repo_router.engine import RouteStatus, route_repository, route_repository_multi
 from repo_router.jev import JevError, JevRoutingStrategy
@@ -28,6 +30,9 @@ def _probability(value: str) -> float:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="git-gps")
     commands = parser.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("init", help="Generate missing repository routers with a small model")
+    init.add_argument("repository", nargs="?", default=".")
+    init.add_argument("--dry-run", action="store_true", help="List planned routers without model calls or writes")
     inspect = commands.add_parser("inspect", help="Print the root ROUTER.md")
     inspect.add_argument("repository", help="Repository directory to inspect")
     route = commands.add_parser("route", help="Find a relevant file for a task")
@@ -55,7 +60,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_depth < 0:
             parser.error("--max-depth must be non-negative")
 
-    if args.command == "inspect":
+    if args.command == "init":
+        try:
+            result = bootstrap_repository(args.repository, dry_run=args.dry_run)
+        except GenerationError as exc:
+            print(f"git-gps: {exc}", file=sys.stderr)
+            return 1
+        if result.existing:
+            print("Existing root ROUTER.md is usable; skipped generation.")
+        else:
+            print("Would create:" if args.dry_run else "Created:")
+            for path in result.created:
+                print(f"- {path}")
+    elif args.command == "inspect":
         try:
             sys.stdout.write(read_root_router(args.repository))
         except RouterError as exc:
