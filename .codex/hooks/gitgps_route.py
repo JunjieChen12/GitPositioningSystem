@@ -59,7 +59,6 @@ def routing_context(output: str, repo_root: Path) -> str:
 
 
 def main() -> int:
-
     try:
         event = json.load(sys.stdin)
         if not isinstance(event, dict):
@@ -70,10 +69,19 @@ def main() -> int:
             return 0
         if not isinstance(cwd, str) or not cwd.strip():
             return 0
-
+        debug = Path("/tmp/gitgps-global-debug.log")
+        debug.open("a").write(
+            f"cwd={cwd}\n"
+            f"GIT_GPS_EXECUTABLE={os.environ.get('GIT_GPS_EXECUTABLE')}\n"
+            f"OPENROUTER_API_KEY_SET={bool(os.environ.get('OPENROUTER_API_KEY'))}\n"
+            "----\n"
+        )
         root_result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"], cwd=cwd,
-            capture_output=True, text=True, timeout=3,
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=3,
         )
         if root_result.returncode:
             return 0
@@ -81,8 +89,7 @@ def main() -> int:
         if not root_text or not Path(root_text).is_absolute():
             return 0
         repo_root = Path(root_text).resolve()
-        if not (repo_root / "ROUTER.md").is_file():
-            return 0
+        # Find Git GPS executable first
         executable = os.environ.get("GIT_GPS_EXECUTABLE")
         if executable:
             executable = os.path.expanduser(executable)
@@ -91,24 +98,75 @@ def main() -> int:
         else:
             executable = shutil.which("git-gps")
         if not executable:
-            print("Git GPS hook: executable unavailable; skipping routing.", file=sys.stderr)
+            print(
+                "Git GPS hook: executable unavailable; skipping routing.",
+                file=sys.stderr,
+            )
             return 0
+        # NEW:
+        # If the repository has no ROUTER.md, bootstrap it first.
+        if not (repo_root / "ROUTER.md").is_file():
+            init_result = subprocess.run(
+                [executable, "init", "."],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=25,
+            )
+            if init_result.returncode:
+                print(
+                    "Git GPS hook: router bootstrap unavailable; continuing.",
+                    file=sys.stderr,
+                )
+                return 0
+            # Make sure init actually created a router
+            if not (repo_root / "ROUTER.md").is_file():
+                print(
+                    "Git GPS hook: router bootstrap did not create ROUTER.md; continuing.",
+                    file=sys.stderr,
+                )
+                return 0
+        # Now route the ORIGINAL Codex prompt
         result = subprocess.run(
-            [executable, "route", ".", prompt, "--strategy", "jev", "--multi",
-             "--top-k", "4", "--threshold", "0.5", "--json"],
-            cwd=repo_root, capture_output=True, text=True, timeout=25,
+            [
+                executable,
+                "route",
+                ".",
+                prompt,
+                "--strategy",
+                "jev",
+                "--multi",
+                "--top-k",
+                "4",
+                "--threshold",
+                "0.5",
+                "--json",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=25,
         )
         if result.returncode:
-            print("Git GPS hook: routing unavailable; continuing.", file=sys.stderr)
+            print(
+                "Git GPS hook: routing unavailable; continuing.",
+                file=sys.stderr,
+            )
             return 0
         context = routing_context(result.stdout, repo_root)
         if context:
             print(context)
     except subprocess.TimeoutExpired:
-        print("Git GPS hook: routing timed out; continuing.", file=sys.stderr)
+        print(
+            "Git GPS hook: routing timed out; continuing.",
+            file=sys.stderr,
+        )
     except Exception:
         # Never echo exception text, subprocess stderr, the prompt, or environment.
-        print("Git GPS hook: routing unavailable; continuing.", file=sys.stderr)
+        print(
+            "Git GPS hook: routing unavailable; continuing.",
+            file=sys.stderr,
+        )
     return 0
 
 
