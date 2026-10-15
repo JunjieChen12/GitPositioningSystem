@@ -9,6 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
+ORIGINAL_RUN = subprocess.run
 
 SCRIPT = Path(__file__).resolve().parents[1] / ".codex/hooks/gitgps_route.py"
 spec = importlib.util.spec_from_file_location("gitgps_hook", SCRIPT)
@@ -92,8 +93,54 @@ def test_missing_router(setup_hook, capsys):
     root, run, which, invoke = setup_hook
     (root / "ROUTER.md").unlink()
     assert invoke() == 0
-    assert run.call_count == 1
+    assert run.call_count == 2
+    assert run.call_args.args[0] == ["/bin/git-gps", "init", "."]
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("router_exists", [False, True])
+@pytest.mark.parametrize("executable", ["/custom/git-gps", ".venv/bin/git-gps"])
+def test_configured_executable_bootstraps_before_routing(
+    setup_hook, monkeypatch, capsys, router_exists, executable,
+):
+    root, run, which, invoke = setup_hook
+    monkeypatch.setenv("GIT_GPS_EXECUTABLE", executable)
+    resolved = executable if Path(executable).is_absolute() else str(root / executable)
+    router = root / "ROUTER.md"
+    if not router_exists:
+        router.unlink()
+    prompt = 'Add a weekly PnL view; $(echo untouched) "with tests"\n--trace'
+    initialized = router_exists
+
+    def dispatch(command, **kwargs):
+        nonlocal initialized
+        if command[0] == "git":
+            return subprocess.CompletedProcess(command, 0, str(root), "")
+        assert command[0] == resolved
+        assert kwargs["cwd"] == root
+        if command[1] == "init":
+            assert command == [resolved, "init", "."]
+            assert not initialized
+            router.write_text("## Important Files\n- src/jev.py — Task routing\n")
+            initialized = True
+            return subprocess.CompletedProcess(command, 0, "bootstrap output", "")
+        assert initialized and router.is_file()
+        assert command == [resolved, "route", ".", prompt, "--strategy", "jev", "--multi",
+                           "--top-k", "4", "--threshold", "0.5", "--json"]
+        return subprocess.CompletedProcess(command, 0, json.dumps({
+            "status": "found", "relevant_paths": ["src/jev.py"], "search_roots": [],
+        }), "")
+
+    run.side_effect = dispatch
+    assert invoke({"prompt": prompt, "cwd": str(root / "src")}) == 0
+    commands = [call.args[0][1] for call in run.call_args_list]
+    assert commands == (["rev-parse", "route"] if router_exists
+                        else ["rev-parse", "init", "route"])
+    which.assert_not_called()
+    output = capsys.readouterr()
+    assert "Relevant paths:\n- src/jev.py" in output.out
+    assert "bootstrap output" not in output.out
+    assert output.err == ""
 
 
 @pytest.mark.parametrize("result", [
@@ -195,6 +242,77 @@ def test_hook_configuration():
     config = json.loads((SCRIPT.parents[1] / "hooks.json").read_text())
     handler = config["hooks"]["UserPromptSubmit"][0]["hooks"][0]
     assert handler["type"] == "command"
-    assert handler["timeout"] == 30
+    assert handler["timeout"] == 120
     assert "git rev-parse --show-toplevel" in handler["command"]
     assert '"$repo_root/.codex/hooks/gitgps_route.py"' in handler["command"]
+
+
+def test_bootstrap_then_route_original_prompt(setup_hook, monkeypatch, capsys):
+    """Exercise real bootstrap and routing engine behind the mocked subprocess boundary."""
+    from repo_router.bootstrap import bootstrap_repository
+    from repo_router.cli import main as cli_main
+    from repo_router.parser import parse_router
+    import contextlib
+
+    root, run, which, invoke = setup_hook
+    (root / "ROUTER.md").unlink()
+    # The hook subprocess mock dispatches Git locally and mocks the hosted models.
+    ORIGINAL_RUN(["git", "init", "-q", str(root)], check=True)
+    (root / "src/jev.py").write_text("def route_task(task): return task\n")
+    model = Mock()
+    model.describe.side_effect = lambda context: {
+        "purpose": "Task routing implementation and tests.",
+        "descriptions": {entry["path"]: "Task routing implementation" for entry in context["entries"]},
+    }
+    monkeypatch.setattr("repo_router.cli.bootstrap_repository",
+                        lambda p, dry_run=False: bootstrap_repository(p, model, dry_run=dry_run))
+    calls = []
+    prompt = "Add a weekly PnL view to the monthly page."
+
+    def dispatch(command, **kwargs):
+        calls.append(command)
+        if command[0] == "git":
+            return ORIGINAL_RUN(command, **kwargs)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            if command[1] == "init":
+                status = cli_main(["init", str(root)])
+            else:
+                assert command[3] == prompt
+                assert parse_router((root / "ROUTER.md").read_text()).files
+                # Mock hosted Jev selection, keep the real CLI and traversal.
+                status = cli_main(["route", str(root), *command[3:]])
+        return subprocess.CompletedProcess(command, status, stdout.getvalue(), stderr.getvalue())
+
+    jev = Mock()
+    def select(self, task, entries, **kwargs):
+        jev(task)
+        return list(entries)[:1]
+    monkeypatch.setattr("repo_router.jev.JevRoutingStrategy.decide_many", select)
+    run.side_effect = dispatch
+    assert invoke({"prompt": prompt, "cwd": str(root / "src")}) == 0
+    assert model.describe.called
+    assert "Relevant paths:\n- src/jev.py" in capsys.readouterr().out
+    assert all(call.args[0] == prompt for call in jev.call_args_list)
+    model.describe.reset_mock()
+    calls.clear()
+    assert invoke({"prompt": prompt, "cwd": str(root)}) == 0
+    model.describe.assert_not_called()
+    assert not any(command[1] == "init" for command in calls)
+
+
+@pytest.mark.parametrize("failure", [
+    subprocess.CompletedProcess([], 1, "sensitive output", "private-test-secret"),
+    subprocess.TimeoutExpired(["init"], 90),
+    RuntimeError("private-test-secret"),
+])
+def test_bootstrap_failures_are_fail_open(setup_hook, capsys, failure):
+    root, run, which, invoke = setup_hook
+    (root / "ROUTER.md").unlink()
+    run.side_effect = [subprocess.CompletedProcess([], 0, str(root), ""), failure]
+    assert invoke() == 0
+    assert run.call_count == 2
+    output = capsys.readouterr()
+    assert not output.out
+    assert "continuing" in output.err
+    assert "private-test-secret" not in output.err

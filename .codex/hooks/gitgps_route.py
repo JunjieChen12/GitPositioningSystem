@@ -81,8 +81,6 @@ def main() -> int:
         if not root_text or not Path(root_text).is_absolute():
             return 0
         repo_root = Path(root_text).resolve()
-        if not (repo_root / "ROUTER.md").is_file():
-            return 0
         executable = os.environ.get("GIT_GPS_EXECUTABLE")
         if executable:
             executable = os.path.expanduser(executable)
@@ -93,6 +91,14 @@ def main() -> int:
         if not executable:
             print("Git GPS hook: executable unavailable; skipping routing.", file=sys.stderr)
             return 0
+        if not (repo_root / "ROUTER.md").exists():
+            bootstrap = subprocess.run(
+                [executable, "init", "."], cwd=repo_root,
+                capture_output=True, text=True, timeout=90,
+            )
+            if bootstrap.returncode or not (repo_root / "ROUTER.md").is_file():
+                print("Git GPS hook: router bootstrap unavailable; continuing.", file=sys.stderr)
+                return 0
         result = subprocess.run(
             [executable, "route", ".", prompt, "--strategy", "jev", "--multi",
              "--top-k", "4", "--threshold", "0.5", "--json"],
