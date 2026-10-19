@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 
@@ -52,10 +53,65 @@ def routing_context(output: str, repo_root: Path) -> str:
         "repository search. Expand beyond them if the route is insufficient."
     )
     # Even a malformed executable response must not echo the inherited secret.
-    secret = os.environ.get("OPENROUTER_API_KEY")
-    if secret and secret in context:
+    if any(value and value in context for name, value in os.environ.items()
+           if any(word in name.upper() for word in ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))):
         raise ValueError("unsafe response")
     return context
+
+
+def bootstrap_context(repo_root: Path, executable: str) -> str:
+    """Delegate preparation to the current coding turn, with no nested process."""
+    return """Git GPS bootstrap required.
+
+This repository does not contain a root ROUTER.md.
+
+Before completing the user's task, CODEX must do the following in this SAME turn:
+1. Inspect the repository structure using your existing repository tools.
+2. Read the important source files necessary to understand each major directory.
+3. Create a root ROUTER.md based on actual file contents and responsibilities.
+4. Create nested ROUTER.md files only where hierarchical routing is useful, such as
+   src/, tests/, frontend/, or backend/. Do not create one in every tiny directory.
+   Preserve existing nested routers.
+5. Keep descriptions concise and functional. Avoid labels like "Python file" or
+   "source files"; describe the behavior evidenced by the code.
+6. Respect .gitignore where practical. Do not inspect or summarize obvious secrets
+   (.env, private keys, credentials, API tokens, or secret files). Exclude generated,
+   ignored, binary, and secret files from routers. Never put secrets into ROUTER.md.
+7. After creating routers, run Git GPS on the user's ORIGINAL task from the
+   repository root shown below. Pass the original task unchanged as ONE argument
+   in place of <original task>; quote it safely or use a subprocess argument list.
+8. Inspect the returned relevant_paths and search_roots before broad repository
+   search. Use those locations as the starting point for the task.
+9. Continue and complete the user's ORIGINAL request. Router creation is only a
+   preparation step and must not replace the user's task.
+
+Use this supported format (paths are relative to the containing router):
+
+# Router
+
+## Purpose
+Concise description of this repository/directory.
+
+## Directories
+- src/ — production source code and major application logic
+- tests/ — automated tests
+
+## Important Files
+- main.py — FastAPI application startup and note CRUD endpoints
+- models.py — persistent application data models
+
+These entries are examples; include only real paths and descriptions verified by
+reading this repository's files. A useful directory description might be:
+- static/ — browser-side calendar rendering, note interactions, and API requests
+
+Use the current Codex model and tools. Do not call a general-purpose external
+model/API, change model configuration, or launch codex/codex exec recursively.
+If Git GPS cannot run, report a concise diagnostic and continue the original task.
+The original user task is already available in this turn; it is not replaced here.
+
+Repository root: """ + json.dumps(str(repo_root)) + """
+Run after router creation:
+""" + shlex.quote(executable) + ' route . "<original task>" --multi --top-k 4 --threshold 0.5 --json'
 
 
 def main() -> int:
@@ -88,17 +144,15 @@ def main() -> int:
                 executable = str((repo_root / executable).resolve())
         else:
             executable = shutil.which("git-gps")
+        if not (repo_root / "ROUTER.md").exists():
+            print(bootstrap_context(repo_root, executable or "git-gps"))
+            if not executable:
+                print("Git GPS hook: executable unavailable; routing requires git-gps or GIT_GPS_EXECUTABLE.",
+                      file=sys.stderr)
+            return 0
         if not executable:
             print("Git GPS hook: executable unavailable; skipping routing.", file=sys.stderr)
             return 0
-        if not (repo_root / "ROUTER.md").exists():
-            bootstrap = subprocess.run(
-                [executable, "init", "."], cwd=repo_root,
-                capture_output=True, text=True, timeout=90,
-            )
-            if bootstrap.returncode or not (repo_root / "ROUTER.md").is_file():
-                print("Git GPS hook: router bootstrap unavailable; continuing.", file=sys.stderr)
-                return 0
         result = subprocess.run(
             [executable, "route", ".", prompt, "--strategy", "jev", "--multi",
              "--top-k", "4", "--threshold", "0.5", "--json"],
