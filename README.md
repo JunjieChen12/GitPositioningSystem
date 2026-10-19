@@ -83,32 +83,67 @@ Before launching Codex, ensure `OPENROUTER_API_KEY` is available and set:
 export GIT_GPS_EXECUTABLE="$HOME/GitPositioningSystem/.venv/bin/git-gps"
 ```
 
-Adjust the path to your checkout, and enable and trust the hook through Codex's `/hooks` menu. For another repository, copy `.codex/hooks.json` and `.codex/hooks/gitgps_route.py` into it. Missing routers are generated automatically.
+Adjust the path to your checkout, and enable and trust the hook through Codex's `/hooks` menu. For another repository, copy `.codex/hooks.json` and `.codex/hooks/gitgps_route.py` into it. When routers are missing, the hook delegates their creation to the current Codex turn.
 
-## Automatic router generation
+## Router bootstrap by Codex
 
-When the Codex hook starts in a repository without a root `ROUTER.md`, Git GPS inspects safe source excerpts with a small model, generates a router hierarchy, and then uses Jev to route the original task:
+Git GPS does not use a general-purpose external LLM to generate `ROUTER.md` files.
+OpenRouter is only required for Jev routing through the Decisions API;
+`OPENROUTER_API_KEY` is used exclusively by the Jev implementation.
+
+With an existing root router:
 
 ```text
-Codex prompt → generate routers if missing → Jev routing → Codex coding
+Codex prompt → Git GPS / Jev routing → routed context → Codex performs task
 ```
 
-Manual bootstrap works from the repository root or a subdirectory:
+Without a root router:
+
+```text
+Codex prompt → hook asks current Codex turn to create routers
+            → Codex reads repository files and writes ROUTER.md
+            → Git GPS / Jev routes original task → Codex performs task
+```
+
+Codex uses its current model and repository tools to read actual source files and
+write concise descriptions of their responsibilities. Nested routers are useful
+for major branching directories, not every tiny directory. Existing root routers
+route immediately without a request to regenerate them. Bootstrap is preparation;
+it never replaces the original coding task. No nested Codex process is launched
+and no model configuration is changed.
+
+After creating routers, Codex runs from the repository root:
 
 ```sh
-git-gps init . --dry-run  # list planned routers; no model calls or writes
-git-gps init .            # create ROUTER.md and useful nested routers
+"$GIT_GPS_EXECUTABLE" route . "<original task>" --multi --top-k 4 --threshold 0.5 --json
 ```
 
-Generation uses the existing `OPENROUTER_API_KEY`. Set `GIT_GPS_ROUTER_MODEL` to select the generation model independently of Jev; the default is [`google/gemini-2.5-flash-lite`](https://openrouter.ai/google/gemini-2.5-flash-lite/). No main coding model is used. `GIT_GPS_EXECUTABLE` selects the installed CLI for the hook. Optionally set `GIT_GPS_ROUTER_URL` to another compatible chat-completions endpoint (the same API key is sent there).
+Use `git-gps` if no executable override is configured. Pass the original task
+unchanged as one safely quoted argument. Inspect `relevant_paths` and
+`search_roots` before broad search, then complete the original request.
+
+Optional deterministic inspection works from a repository root or subdirectory:
 
 ```sh
-export GIT_GPS_ROUTER_MODEL="google/gemini-2.5-flash-lite"
+git-gps init .         # report candidate paths; coding agent creates routers
+git-gps init . --json  # machine-readable router_required / router_exists request
 ```
 
-Inspection respects Git ignores, including ignored tracked files, and excludes generated directories, obvious secret files, symlinks, binaries, and excerpts containing recognizable credentials. Requests batch bounded excerpts and child summaries, with limits of 600 inspected files, 24 routers, and 75 seconds of generation. Large repositories may receive partial coverage. Descriptions stay concise and all generated routers are parsed before writing; the root is written last.
+`init` never writes routers or calls a model/API and requires no API key.
+`--dry-run` remains a compatibility alias for the same inspection behavior.
+Inspection respects Git ignores (including ignored tracked files), excludes
+obvious secret files, generated directories, symlinks, binaries, and recognizable
+credentials, and examines bounded excerpts from at most 600 safe text files.
+JSON returns candidate paths rather than source excerpts or generated descriptions;
+large repositories may receive partial candidate coverage. Codex must still read
+actual files and must not inspect or summarize `.env`, private keys, credentials,
+API tokens, or other secrets, or put secrets into routers.
 
-Existing root routers skip generation entirely. Manual initialization checks their format; unusable existing routers need manual repair. Existing nested routers are preserved. Bootstrap or routing failures emit a short diagnostic and Codex continues with the original prompt. The hook allows up to 90 seconds for bootstrap and 25 seconds for routing. It injects only routed paths and search roots. This feature does not synchronize existing routers.
+The missing-router hook only injects instructions; it makes no Jev call until
+Codex creates routers and explicitly runs routing. It still injects instructions
+when the Git GPS executable is unavailable, with a concise diagnostic. Existing
+routers use the fast routing path with a 25-second timeout. Hook failures remain
+fail-open, allowing Codex to continue the original task.
 
 ## Testing
 

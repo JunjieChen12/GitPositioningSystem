@@ -4,8 +4,7 @@ import argparse
 import json
 import sys
 
-from repo_router.bootstrap import bootstrap_repository
-from repo_router.generation import GenerationError
+from repo_router.bootstrap import BootstrapError, bootstrap_repository
 from repo_router.decision import KeywordRoutingStrategy
 from repo_router.engine import RouteStatus, route_repository, route_repository_multi
 from repo_router.jev import JevError, JevRoutingStrategy
@@ -30,9 +29,10 @@ def _probability(value: str) -> float:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="git-gps")
     commands = parser.add_subparsers(dest="command", required=True)
-    init = commands.add_parser("init", help="Generate missing repository routers with a small model")
+    init = commands.add_parser("init", help="Inspect repository for coding-agent router creation")
     init.add_argument("repository", nargs="?", default=".")
-    init.add_argument("--dry-run", action="store_true", help="List planned routers without model calls or writes")
+    init.add_argument("--dry-run", action="store_true", help="Compatibility alias: init always inspects without writes")
+    init.add_argument("--json", action="store_true", help="Print a machine-readable bootstrap request")
     inspect = commands.add_parser("inspect", help="Print the root ROUTER.md")
     inspect.add_argument("repository", help="Repository directory to inspect")
     route = commands.add_parser("route", help="Find a relevant file for a task")
@@ -62,15 +62,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "init":
         try:
-            result = bootstrap_repository(args.repository, dry_run=args.dry_run)
-        except GenerationError as exc:
+            result = bootstrap_repository(args.repository)
+        except BootstrapError as exc:
             print(f"git-gps: {exc}", file=sys.stderr)
             return 1
-        if result.existing:
-            print("Existing root ROUTER.md is usable; skipped generation.")
+        if args.json:
+            print(json.dumps(result))
+        elif result["status"] == "router_exists":
+            print("Existing root ROUTER.md is usable; no bootstrap required.")
         else:
-            print("Would create:" if args.dry_run else "Created:")
-            for path in result.created:
+            print("Router required. The coding agent must inspect source files and create ROUTER.md.")
+            print("Repository root: " + result["repository_root"])
+            print("Suggested directories:")
+            for path in result["suggested_directories"]:
+                print(f"- {path}")
+            print("Files to inspect:")
+            for path in result["files_to_inspect"]:
                 print(f"- {path}")
     elif args.command == "inspect":
         try:
